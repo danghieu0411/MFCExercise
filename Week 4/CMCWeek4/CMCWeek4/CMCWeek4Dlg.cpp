@@ -36,9 +36,13 @@ static bool ReceiveAll(SOCKET s, char* data, int size)
 	return true;
 }
 
-const int PORT = 8888;
-const UINT WM_CHAT_RECEIVED = WM_APP + 1;  // WM_APP marks the beginning of user-defined message value, values prior to it are reserved for system message
+namespace {
+	const wchar_t RUN_KEY[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+	const wchar_t VALUE[] = L"ChatAppServer";
 
+	const int PORT = 8888;
+	const UINT WM_CHAT_RECEIVED = WM_APP + 1;  // WM_APP marks the beginning of user-defined message value, values prior to it are reserved for system message
+}
 // CAboutDlg dialog used for App About
 
 class CAboutDlg : public CDialogEx
@@ -94,6 +98,7 @@ BEGIN_MESSAGE_MAP(CCMCWeek4Dlg, CDialogEx)
 	ON_WM_DESTROY()
 	ON_BN_CLICKED(IDC_SEND, &CCMCWeek4Dlg::OnBnClickedSend)
 	ON_MESSAGE(WM_CHAT_RECEIVED, &CCMCWeek4Dlg::OnChatReceived)
+	ON_BN_CLICKED(IDC_CHECK_AUTORUN, &CCMCWeek4Dlg::OnBnClickedCheckAutorun)
 END_MESSAGE_MAP()
 
 
@@ -129,6 +134,12 @@ BOOL CCMCWeek4Dlg::OnInitDialog()
 	SetIcon(m_hIcon, FALSE);		// Set small icon
 
 	// TODO: Add extra initialization here
+
+	CheckDlgButton(
+		IDC_CHECK_AUTORUN,
+		IsAutorunEnable() ? BST_CHECKED : BST_UNCHECKED
+	);
+
 	int result = WSAStartup(MAKEWORD(2, 2), &m_wsaData);
 	if (result != 0) {
 		MessageBox(L"Cannot initialize Winsock!", L"Error");
@@ -349,4 +360,115 @@ LRESULT CCMCWeek4Dlg::OnChatReceived(WPARAM wParam, LPARAM lParam)
 	AppendHistory(*message);
 	delete message;
 	return 0;
+}
+
+bool CCMCWeek4Dlg::IsAutorunEnable() {
+	HKEY hKey = nullptr;
+
+	LONG result = RegOpenKeyExW(
+		HKEY_CURRENT_USER, // qurey HKCU
+		RUN_KEY, // autorun
+		0,
+		KEY_QUERY_VALUE, // set this when we only query value
+		&hKey // pointer to the handle
+	);
+	if (result != ERROR_SUCCESS) return false;
+
+	wchar_t registeredPath[32768] = {};
+	DWORD type = 0;
+	DWORD size = sizeof(registeredPath);
+
+	result = RegQueryValueExW(
+		hKey, // key handle
+		VALUE, // value to query
+		nullptr, // reserved
+		&type, // pointer to a variable to get the type of data stored in value
+		(BYTE*)registeredPath, // pointer to a buffer to hold tde queried data
+		&size // pointer to a variable holding the buffer size
+	);
+
+	RegCloseKey(hKey);
+
+	if (result != ERROR_SUCCESS || type != REG_SZ) {
+		return false;
+	}
+
+	if (size < sizeof(wchar_t) || size>sizeof(registeredPath) || size % sizeof(wchar_t) != 0) return false;
+
+	registeredPath[size / sizeof(wchar_t) - 1] = L'\0';
+
+	wchar_t exePath[32768] = {};
+	DWORD length = GetModuleFileNameW(
+		nullptr, // null denotes that we want to specify path of current process
+		exePath, // buffer to receive the path
+		_countof(exePath) // size of the buffer in TCHAR, that is why i use _countof() to get number of elements, not sizeof()
+	);
+	if (length == 0 || length >= _countof(exePath)) return false;
+
+	CString expected;
+	expected.Format(L"\"%s\"", exePath);
+
+	return expected.CompareNoCase(registeredPath)==0;
+}
+
+bool CCMCWeek4Dlg::SetAutorun(bool enable) {
+	HKEY hKey = nullptr;
+
+	LONG result = RegCreateKeyExW( // create if not exist, open if exist
+		HKEY_CURRENT_USER,
+		RUN_KEY,
+		0,
+		nullptr,
+		REG_OPTION_NON_VOLATILE, // value remains as hive unloads
+		KEY_SET_VALUE,
+		nullptr,
+		&hKey,
+		nullptr
+	);
+
+	if (result != ERROR_SUCCESS) return false;
+
+	if (enable) {
+		wchar_t exePath[32768] = {};
+
+		DWORD length = GetModuleFileNameW(nullptr, exePath, _countof(exePath));
+		if (length == 0 || length >= _countof(exePath)) {
+			RegCloseKey(hKey);
+			return false;
+		}
+
+		CString path;
+		path.Format(L"\"%s\"", exePath);
+
+		result = RegSetValueExW(
+			hKey,
+			VALUE,
+			0,
+			REG_SZ,
+			(const BYTE*)(LPCWSTR)path,
+			(DWORD)(path.GetLength() + 1) * sizeof(wchar_t)
+		);
+	}
+	else {
+		result = RegDeleteValueW(hKey, VALUE);
+		if (result == ERROR_FILE_NOT_FOUND) {
+			result = ERROR_SUCCESS;
+		}
+	}
+
+	RegCloseKey(hKey);
+	return result == ERROR_SUCCESS;
+}
+
+
+void CCMCWeek4Dlg::OnBnClickedCheckAutorun()
+{
+	bool enable = IsDlgButtonChecked(IDC_CHECK_AUTORUN) == BST_CHECKED;
+	if (!SetAutorun(enable)) {
+		MessageBox(L"Fail to update autorun settings", L"Error");
+		CheckDlgButton(
+			IDC_CHECK_AUTORUN,
+			IsAutorunEnable() ? BST_CHECKED : BST_UNCHECKED
+		);
+	}
 }

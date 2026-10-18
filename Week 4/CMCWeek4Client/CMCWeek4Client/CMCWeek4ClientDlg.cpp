@@ -37,9 +37,16 @@ static bool ReceiveAll(SOCKET s, char* data, int size)
     return true;
 }
 
-const int PORT = 8888;
-const char* SERVER_IP = "192.168.234.1";
-const UINT WM_CHAT_RECEIVED = WM_APP + 1;
+namespace {
+    const wchar_t RUN_KEY[] =
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+
+    const wchar_t VALUE_NAME[] = L"ChatAppClient";
+
+    const int PORT = 8888;
+    const char* SERVER_IP = "192.168.234.1";
+    const UINT WM_CHAT_RECEIVED = WM_APP + 1;
+}
 
 // CAboutDlg dialog used for App About
 
@@ -96,6 +103,7 @@ BEGIN_MESSAGE_MAP(CCMCWeek4ClientDlg, CDialogEx)
 	ON_WM_DESTROY()
 	ON_BN_CLICKED(IDC_SEND, &CCMCWeek4ClientDlg::OnBnClickedSend)
 	ON_MESSAGE(WM_CHAT_RECEIVED, &CCMCWeek4ClientDlg::OnChatReceived)
+    ON_BN_CLICKED(IDC_CHECK_AUTORUN, &CCMCWeek4ClientDlg::OnBnClickedCheckAutorun)
 END_MESSAGE_MAP()
 
 
@@ -131,6 +139,12 @@ BOOL CCMCWeek4ClientDlg::OnInitDialog()
 	SetIcon(m_hIcon, FALSE);		// Set small icon
 
 	// TODO: Add extra initialization here
+
+    CheckDlgButton(
+        IDC_CHECK_AUTORUN,
+        IsAutorunEnabled() ? BST_CHECKED : BST_UNCHECKED
+    );
+
     int result = WSAStartup(MAKEWORD(2, 2), &m_wsaData);
     if (result != 0) {
         MessageBox(L"Cannot initialize Winsock!", L"Error");
@@ -320,4 +334,113 @@ void CCMCWeek4ClientDlg::OnDestroy()
         WSACleanup();
 
     CDialogEx::OnDestroy();
+}
+
+
+void CCMCWeek4ClientDlg::OnBnClickedCheckAutorun()
+{
+    bool enable =
+        IsDlgButtonChecked(IDC_CHECK_AUTORUN) == BST_CHECKED;
+
+    if (!SetAutorun(enable))
+    {
+        AfxMessageBox(L"Failed to update autorun settings.");
+
+        CheckDlgButton(
+            IDC_CHECK_AUTORUN,
+            IsAutorunEnabled() ? BST_CHECKED : BST_UNCHECKED
+        );
+    }
+}
+
+bool CCMCWeek4ClientDlg::SetAutorun(bool enable)
+{
+    HKEY hKey = nullptr;
+
+    LONG result = RegCreateKeyExW(
+        HKEY_CURRENT_USER,
+        RUN_KEY,
+        0,
+        nullptr,
+        REG_OPTION_NON_VOLATILE,
+        KEY_SET_VALUE,
+        nullptr,
+        &hKey,
+        nullptr
+    );
+
+    if (result != ERROR_SUCCESS)
+        return false;
+
+    if (enable)
+    {
+        wchar_t exePath[32768] = {};
+
+        DWORD length = GetModuleFileNameW(
+            nullptr, exePath, _countof(exePath)
+        );
+
+        if (length == 0 || length >= _countof(exePath))
+        {
+            RegCloseKey(hKey);
+            return false;
+        }
+
+        CString path;
+        path.Format(L"\"%s\"", exePath);
+
+        result = RegSetValueExW(
+            hKey,
+            VALUE_NAME,
+            0,
+            REG_SZ,
+            (BYTE*)(LPCWSTR)path,
+            (DWORD)(path.GetLength() + 1) * sizeof(wchar_t)
+        );
+    }
+    else
+    {
+        result = RegDeleteValueW(hKey, VALUE_NAME);
+
+        if (result == ERROR_FILE_NOT_FOUND)
+            result = ERROR_SUCCESS;
+    }
+
+    RegCloseKey(hKey);
+
+    return result == ERROR_SUCCESS;
+}
+
+bool CCMCWeek4ClientDlg::IsAutorunEnabled() {
+    wchar_t registeredPath[32768] = {};
+    DWORD size = sizeof(registeredPath);
+
+    LONG result = RegGetValueW(
+        HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+        L"ChatAppClient",
+        RRF_RT_REG_SZ,  // restrict to REG_SZ, data must be null-terminated
+        nullptr,
+        registeredPath,
+        &size
+    );
+
+    if (result != ERROR_SUCCESS)
+        return false;
+
+    wchar_t exePath[32768] = {};
+
+    DWORD length = GetModuleFileNameW(
+        nullptr,
+        exePath,
+        _countof(exePath)
+    );
+
+    if (length == 0 || length >= _countof(exePath))
+        return false;
+
+    CString expected;
+    expected.Format(L"\"%s\"", exePath);
+
+    return expected.CompareNoCase(registeredPath) == 0;
 }

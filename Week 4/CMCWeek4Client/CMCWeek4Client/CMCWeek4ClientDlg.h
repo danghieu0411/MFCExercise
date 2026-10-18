@@ -46,6 +46,10 @@ private:
     afx_msg LRESULT OnChatReceived(WPARAM wParam, LPARAM lParam);
     afx_msg void OnDestroy();
 
+	bool IsAutorunEnabled();
+	bool SetAutorun(bool enable);
+
 public:
     afx_msg void OnBnClickedSend();
+	afx_msg void OnBnClickedCheckAutorun();
 };

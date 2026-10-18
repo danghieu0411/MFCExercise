@@ -46,6 +46,10 @@ private:
 	static DWORD WINAPI ServerThreadProc(LPVOID lpParam);
 	afx_msg LRESULT OnChatReceived(WPARAM wParam, LPARAM lParam);
 	void AppendHistory(const CString& line);
+
+	bool IsAutorunEnable();
+	bool SetAutorun(bool enable);
 public:
 	afx_msg void OnBnClickedSend();
+	afx_msg void OnBnClickedCheckAutorun();
 };
