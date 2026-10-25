@@ -5,8 +5,15 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <Windows.h>
+#include <vector>
+#include <string>
 
 #pragma comment(lib, "Ws2_32.lib")
+
+struct ClientState {
+    SOCKET socket;
+    std::string pendingData;
+};
 
 wchar_t SERVICE_NAME[] = L"CMCWeek5";
 SERVICE_STATUS_HANDLE g_statusHandle = nullptr;
@@ -57,24 +64,25 @@ DWORD WINAPI ServiceCtrlHandler(
 void WINAPI ServiceMain(DWORD agrc, LPWSTR* argv) {
     g_statusHandle = RegisterServiceCtrlHandlerExW(
         SERVICE_NAME,
-        ServiceCtrlHandler,
-        nullptr
+        ServiceCtrlHandler, // pointer to the handler function
+        nullptr // extra data to pass to the handler function
     );
     if (g_statusHandle == nullptr) return;
-    g_status.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
+
+    g_status.dwServiceType = SERVICE_WIN32_OWN_PROCESS; // service type, here: the service runs its own process
     g_status.dwCurrentState = SERVICE_START_PENDING;
     g_status.dwControlsAccepted = 0;
-    g_status.dwWin32ExitCode = NO_ERROR;
-    g_status.dwCheckPoint = 0;
-    g_status.dwWaitHint = 3000;
+    g_status.dwWin32ExitCode = NO_ERROR; // use to report error occurring during start or stop, set to NO_ERROR when running or in normal termination
+    g_status.dwCheckPoint = 0; // used to report progress in lengthy operation, not neccessary in this case
+    g_status.dwWaitHint = 3000; // estimated time for a pending operation
 
     SetServiceStatus(g_statusHandle, &g_status);
 
     g_stopEvent = CreateEventW(
-        nullptr,
-        TRUE,
-        FALSE,
-        nullptr
+        nullptr, // security attribute, null means childs cannot inherit the handle
+        TRUE, // manual reset is enabled
+        FALSE,  // initial state is non-signaled
+        nullptr // pointer to name of the event object, not used here
     );
 
     if (g_stopEvent == nullptr)
@@ -162,8 +170,11 @@ DWORD WINAPI ServerThreadProc(LPVOID param)
     // Set socket to non-blocking mode
     u_long nonBlocking = 1;
 
-    if (ioctlsocket(listenSocket, FIONBIO, &nonBlocking)
-        == SOCKET_ERROR)
+    if (ioctlsocket(
+        listenSocket, 
+        FIONBIO, 
+        &nonBlocking
+    )== SOCKET_ERROR)
     {
         closesocket(listenSocket);
         WSACleanup();
@@ -192,18 +203,31 @@ DWORD WINAPI ServerThreadProc(LPVOID param)
         return 1;
     }
 
+    std::vector<ClientState> clients;
+    const size_t MAX_PENDING = 64 * 1024;
+
     while (WaitForSingleObject(g_stopEvent, 0) == WAIT_TIMEOUT)
     {
         fd_set readSet;
+        fd_set writeSet;
+
         FD_ZERO(&readSet);
+        FD_ZERO(&writeSet);
+
         FD_SET(listenSocket, &readSet);
+
+        for (const auto& client : clients) {
+            FD_SET(client.socket, &readSet);
+
+            if (!(client.pendingData.empty())) FD_SET(client.socket, &writeSet);
+        }
 
         timeval timeout{ 0, 200000 };
 
         int ready = select(
             0,
             &readSet,
-            nullptr,
+            &writeSet,
             nullptr,
             &timeout
         );
@@ -214,105 +238,101 @@ DWORD WINAPI ServerThreadProc(LPVOID param)
         if (ready == 0)
             continue;
 
-        SOCKET client = accept(listenSocket, nullptr, nullptr);
-
-        if (client == INVALID_SOCKET)
-            continue;
-
-        // Client socket is also non-blocking
-        char buffer[1024];
-
-        while (WaitForSingleObject(g_stopEvent, 0) == WAIT_TIMEOUT)
+        if (FD_ISSET(listenSocket, &readSet))
         {
-            fd_set clientReadSet;
-            FD_ZERO(&clientReadSet);
-            FD_SET(client, &clientReadSet);
+            SOCKET newClient = accept(listenSocket, nullptr, nullptr);
 
-            timeval clientTimeout{ 0, 200000 };
-
-            int clientReady = select(
-                0,
-                &clientReadSet,
-                nullptr,
-                nullptr,
-                &clientTimeout
-            );
-
-            if (clientReady == SOCKET_ERROR)
-                break;
-
-            if (clientReady == 0)
-                continue;
-
-            int received = recv(client, buffer, sizeof(buffer), 0);
-
-            if (received <= 0)
-                break;
-
-            // Echo the bytes back to the client
-            int total = 0;
-
-            while (total < received)
+            if (newClient != INVALID_SOCKET)
             {
-                fd_set writeSet;
-                FD_ZERO(&writeSet);
-                FD_SET(client, &writeSet);
+                u_long clientMode = 1;
 
-                timeval writeTimeout{ 0, 200000 };
-
-                int writable = select(
-                    0,
-                    nullptr,
-                    &writeSet,
-                    nullptr,
-                    &writeTimeout
-                );
-
-                if (writable == SOCKET_ERROR)
-                    break;
-
-                if (writable == 0)
+                if (clients.size() >= FD_SETSIZE - 1 ||
+                    ioctlsocket(newClient, FIONBIO, &clientMode)
+                    == SOCKET_ERROR)
                 {
-                    if (WaitForSingleObject(g_stopEvent, 0)
-                        != WAIT_TIMEOUT)
-                        break;
-
-                    continue;
+                    closesocket(newClient);
                 }
+                else
+                {
+                    clients.push_back({ newClient, {} });
+                }
+            }
+        }
+        
+        for (size_t i = 0; i < clients.size(); )
+        {
+            ClientState& client = clients[i];
+            bool disconnect = false;
 
-                int sent = send(
-                    client,
-                    buffer + total,
-                    received - total,
+            if (FD_ISSET(client.socket, &readSet))
+            {
+                char buffer[1024];
+
+                int received = recv(
+                    client.socket,
+                    buffer,
+                    sizeof(buffer),
                     0
                 );
 
-                if (sent <= 0)
-                    break;
+                if (received > 0)
+                {
+                    client.pendingData.append(buffer, received);
 
-                total += sent;
+                    if (client.pendingData.size() > MAX_PENDING)
+                        disconnect = true;
+                }
+                else if (received == 0)
+                {
+                    disconnect = true;
+                }
+                else if (WSAGetLastError() != WSAEWOULDBLOCK)
+                {
+                    disconnect = true;
+                }
             }
 
-            if (total != received)
-                break;
-        }
+            // Send pending echo data when writable
+            if (!disconnect &&
+                !client.pendingData.empty() &&
+                FD_ISSET(client.socket, &writeSet))
+            {
+                int sent = send(
+                    client.socket,
+                    client.pendingData.data(),
+                    (int)(client.pendingData.size()),
+                    0
+                );
 
-        closesocket(client);
+                if (sent > 0)
+                {
+                    client.pendingData.erase(0, sent);
+                }
+                else if (sent == 0 ||
+                    WSAGetLastError() != WSAEWOULDBLOCK)
+                {
+                    disconnect = true;
+                }
+            }
+
+            if (disconnect)
+            {
+                closesocket(client.socket);
+                clients.erase(clients.begin() + i);
+            }
+            else
+            {
+                ++i;
+            }
+        }
     }
+
+    // Service is stopping: close all connections
+    for (const auto& client : clients)
+        closesocket(client.socket);
 
     closesocket(listenSocket);
     WSACleanup();
 
     return 0;
 }
-
-// Run program: Ctrl + F5 or Debug > Start Without Debugging menu
-// Debug program: F5 or Debug > Start Debugging menu
-
-// Tips for Getting Started: 
-//   1. Use the Solution Explorer window to add/manage files
-//   2. Use the Team Explorer window to connect to source control
-//   3. Use the Output window to see build output and other messages
-//   4. Use the Error List window to view errors
-//   5. Go to Project > Add New Item to create new code files, or Project > Add Existing Item to add existing code files to the project
-//   6. In the future, to open this project again, go to File > Open > Project and select the .sln file
