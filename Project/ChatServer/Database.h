@@ -46,7 +46,6 @@ public:
     std::vector<ChatMessage> GetMessages(
         int userId, int otherUserId, int lastId);
 
-    bool AddContact(int userId, int contactId);
     std::vector<ContactInfo> GetContacts(int userId);
 
 private:

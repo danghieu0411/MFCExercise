@@ -28,7 +28,7 @@ bool TcpServer::AddOnlineUser(int userId, SOCKET socket) {
 
 void TcpServer::RemoveOnlineUser(int userId, SOCKET socket) {
     CriticalSectionGuard lock(m_onlineLock);
-    auto it = m_onlineUsers.find(userId);
+    auto it = m_onlineUsers.find(userId); // the type of 'it' is indeed an iterator, we use it like a pointer with ->
     if (it != m_onlineUsers.end() && it->second == socket)
         m_onlineUsers.erase(it);
 }

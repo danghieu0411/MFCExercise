@@ -23,5 +23,5 @@ private:
     SOCKET m_listenSocket = INVALID_SOCKET;
     Database m_database;
     std::unordered_map<int, SOCKET> m_onlineUsers;
-    CRITICAL_SECTION m_onlineLock;
+    CRITICAL_SECTION m_onlineLock; // to protect the online user map
 };

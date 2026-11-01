@@ -141,10 +141,9 @@ DWORD WINAPI ClientThread(LPVOID param) {
 
             std::string otherUser = packet.payload.substr(0, pos);
             std::string idText = packet.payload.substr(pos + 3);
-            int lastId = 0;
-            auto parsed = std::from_chars(idText.data(), idText.data() + idText.size(), lastId);
-            if (otherUser.empty() || parsed.ec != std::errc{} ||
-                parsed.ptr != idText.data() + idText.size() || lastId < 0) {
+            int lastId = std::stoi(idText.c_str());
+
+            if (otherUser.empty() || lastId < 0) {
                 sent = server->SendToClient(sock, { Opcode::Error, "INVALID_PAYLOAD" });
                 break;
             }
@@ -170,37 +169,6 @@ DWORD WINAPI ClientThread(LPVOID param) {
 
             if (sent)
                 sent = server->SendToClient(sock, { Opcode::MessagesEnd, "" });
-            break;
-        }
-
-        case Opcode::AddContact: {
-            if (currentUserId == -1) {
-                sent = server->SendToClient(sock, { Opcode::Error, "NOT_AUTHENTICATED" });
-                break;
-            }
-
-            std::string username = packet.payload;
-            if (username.empty() || username.find('\0') != std::string::npos) {
-                sent = server->SendToClient(sock, { Opcode::Error, "INVALID_PAYLOAD" });
-                break;
-            }
-
-            int contactId = -1;
-            if (!db.FindUserId(username, contactId)) {
-                sent = server->SendToClient(sock, { Opcode::Error, "USER_NOT_FOUND" });
-                break;
-            }
-
-            if (contactId == currentUserId) {
-                sent = server->SendToClient(sock, { Opcode::Error, "INVALID_CONTACT" });
-                break;
-            }
-
-            bool success = db.AddContact(currentUserId, contactId);
-            sent = server->SendToClient(sock, {
-                success ? Opcode::Success : Opcode::Error,
-                success ? "" : "DATABASE_ERROR"
-            });
             break;
         }
 

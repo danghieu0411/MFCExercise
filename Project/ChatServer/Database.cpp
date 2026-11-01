@@ -19,7 +19,7 @@ bool Database::Open() {
         return false;
 
     std::wstring path(exePath, len);
-    path.resize(path.find_last_of(L"\\/") + 1);
+    path.resize(path.find_last_of(L"\\/") + 1); // find the last occurence of \ or /, not both, rfind() would find both, but find_last_of wouldn't
     path += L"chat.db";
     return sqlite3_open16(path.c_str(), &m_db) == SQLITE_OK;
 }
@@ -50,14 +50,6 @@ bool Database::Initialize() {
         "sent_at INTEGER NOT NULL,"
         "FOREIGN KEY(sender_id) REFERENCES users(id),"
         "FOREIGN KEY(receiver_id) REFERENCES users(id)"
-        ");"
-
-        "CREATE TABLE IF NOT EXISTS contacts ("
-        "owner_user_id INTEGER NOT NULL,"
-        "contact_user_id INTEGER NOT NULL,"
-        "PRIMARY KEY(owner_user_id, contact_user_id),"
-        "FOREIGN KEY(owner_user_id) REFERENCES users(id),"
-        "FOREIGN KEY(contact_user_id) REFERENCES users(id)"
         ");";
 
     return sqlite3_exec(m_db, sql, nullptr, nullptr, nullptr) == SQLITE_OK;
@@ -167,7 +159,7 @@ std::vector<ChatMessage> Database::GetMessages(int userId, int otherUserId, int 
         "WHERE ((sender_id = ? AND receiver_id = ?) "
         "OR (sender_id = ? AND receiver_id = ?)) "
         "AND id > ? "
-        "ORDER BY id ASC LIMIT 100;";
+        "ORDER BY id ASC LIMIT 100;"; // demo app so I limit it to only 100 entries.
 
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK)
@@ -197,42 +189,24 @@ std::vector<ChatMessage> Database::GetMessages(int userId, int otherUserId, int 
     return messages;
 }
 
-bool Database::AddContact(int userId, int contactId) {
-    CriticalSectionGuard lock(m_dbLock);
-    const char* sql =
-        "INSERT OR IGNORE INTO contacts (owner_user_id, contact_user_id) VALUES (?, ?);";
-
-    sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK)
-        return false;
-
-    sqlite3_bind_int(stmt, 1, userId);
-    sqlite3_bind_int(stmt, 2, contactId);
-    bool success = (sqlite3_step(stmt) == SQLITE_DONE);
-    sqlite3_finalize(stmt);
-    return success;
-}
-
 std::vector<ContactInfo> Database::GetContacts(int userId) {
     CriticalSectionGuard lock(m_dbLock);
     std::vector<ContactInfo> contacts;
 
     const char* sql =
-        "SELECT u.id, u.username, "
-        "COALESCE((SELECT MAX(m.id) FROM messages m "
-        "WHERE (m.sender_id = ? AND m.receiver_id = u.id) "
-        "OR (m.receiver_id = ? AND m.sender_id = u.id)), 0) AS last_id "
-        "FROM users u WHERE u.id IN ("
-        "SELECT contact_user_id FROM contacts WHERE owner_user_id = ? "
-        "UNION SELECT receiver_id FROM messages WHERE sender_id = ? "
-        "UNION SELECT sender_id FROM messages WHERE receiver_id = ?) "
-        "ORDER BY last_id DESC, u.username COLLATE NOCASE;";
+        "SELECT u.id, u.username, MAX(m.id) AS last_id "
+        "FROM users u "
+        "JOIN messages m ON "
+        "(m.sender_id = ? AND m.receiver_id = u.id) "
+        "OR (m.receiver_id = ? AND m.sender_id = u.id) "
+        "GROUP BY u.id, u.username "
+        "ORDER BY last_id DESC, u.username COLLATE NOCASE;"; // 'COLLATE NOCASE' mean the fallback order username will be case-insensitive
 
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK)
         return contacts;
 
-    for (int i = 1; i <= 5; ++i)
+    for (int i = 1; i <= 2; ++i)
         sqlite3_bind_int(stmt, i, userId);
 
     while (sqlite3_step(stmt) == SQLITE_ROW) {
