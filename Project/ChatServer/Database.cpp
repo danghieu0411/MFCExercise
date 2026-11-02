@@ -1,8 +1,6 @@
 #include "Database.h"
 #include "sha256.h"
 
-#pragma comment(lib, "winsqlite3.lib")
-
 Database::Database() {
     InitializeCriticalSection(&m_dbLock);
 }

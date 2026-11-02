@@ -148,6 +148,7 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Protocol.cpp" />
     <ClCompile Include="sha256.cpp" />
+    <ClCompile Include="sqlite3.c" />
     <ClCompile Include="TcpServer.cpp" />
   </ItemGroup>
   <ItemGroup>

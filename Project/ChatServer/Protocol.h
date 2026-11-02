@@ -11,7 +11,6 @@ enum class Opcode : uint8_t {
     SendMessage = 0x04,
     GetMessages = 0x05,
     GetContacts = 0x06,
-    AddContact = 0x07,
 
     Success = 0x80,
     Error = 0x81,
