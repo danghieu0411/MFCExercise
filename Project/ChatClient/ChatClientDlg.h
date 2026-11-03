@@ -64,7 +64,7 @@ private:
     TcpClient m_client;
     CLoginDlg* m_loginDlg = nullptr;
 
-    Request m_request = Request::None;
+    Request m_request = Request::None; // specify WHICH response it is waiting from the server
     std::string m_myUsername;
     std::string m_currentUsername;
     std::string m_loadingUsername;

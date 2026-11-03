@@ -40,6 +40,8 @@ void CLoginDlg::OnLogin() {
 
     m_attemptUsername = name;
     m_waiting = true;
+
+    // temporarily disable these buttons, prevent user from repeatedly press login
     GetDlgItem(IDC_BTN_LOGIN)->EnableWindow(FALSE);
     GetDlgItem(IDC_BTN_REGISTER)->EnableWindow(FALSE);
 }

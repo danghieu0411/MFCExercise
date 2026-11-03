@@ -1,6 +1,7 @@
 #include "TcpServer.h"
 #include "ClientHandler.h"
 #include <iostream>
+#include <vector>
 
 #pragma comment(lib, "Ws2_32.lib")
 
@@ -35,7 +36,7 @@ void TcpServer::RemoveOnlineUser(int userId, SOCKET socket) {
 
 bool TcpServer::SendToClient(SOCKET socket, const Packet& packet) {
     CriticalSectionGuard lock(m_onlineLock);
-    return SendPacket(socket, packet);
+    return SendPacket(socket, packet, m_stopEvent);
 }
 
 bool TcpServer::NotifyUser(int userId, const Packet& packet) {
@@ -43,7 +44,11 @@ bool TcpServer::NotifyUser(int userId, const Packet& packet) {
     auto it = m_onlineUsers.find(userId);
     if (it == m_onlineUsers.end())
         return false;
-    return SendPacket(it->second, packet);
+    return SendPacket(it->second, packet, m_stopEvent);
+}
+
+HANDLE TcpServer::GetStopEvent() const {
+    return m_stopEvent;
 }
 
 void TcpServer::Disconnect(SOCKET socket, int userId) {
@@ -79,10 +84,41 @@ bool TcpServer::Start(unsigned short port) {
 
     std::cout << "Server is listening on port " << port << "\n";
 
-    while (true) {
+    u_long nonBlocking = 1;
+    return ioctlsocket(m_listenSocket, FIONBIO, &nonBlocking) != SOCKET_ERROR;
+}
+
+bool TcpServer::Run(HANDLE stopEvent) {
+    m_stopEvent = stopEvent;
+    std::vector<HANDLE> clientThreads;
+    bool success = true;
+
+    while (WaitForSingleObject(stopEvent, 0) == WAIT_TIMEOUT) {
+        fd_set readSet;
+        FD_ZERO(&readSet);
+        FD_SET(m_listenSocket, &readSet);
+        timeval timeout{ 0, 200000 }; 
+        int ready = select(0, &readSet, nullptr, nullptr, &timeout);
+        if (ready == SOCKET_ERROR) {
+            success = false;
+            break;
+        }
+        if (ready == 0)
+            continue;
+        if (WaitForSingleObject(stopEvent, 0) != WAIT_TIMEOUT)
+            break;
+
         SOCKET clientSock = accept(m_listenSocket, nullptr, nullptr);
         if (clientSock == INVALID_SOCKET) {
-            Sleep(100);
+            if (WSAGetLastError() == WSAEWOULDBLOCK)
+                continue;
+            success = false;
+            break;
+        }
+
+        u_long nonBlocking = 1;
+        if (ioctlsocket(clientSock, FIONBIO, &nonBlocking) == SOCKET_ERROR) {
+            closesocket(clientSock);
             continue;
         }
 
@@ -92,11 +128,19 @@ bool TcpServer::Start(unsigned short port) {
         );
 
         if (hThread == nullptr) {
-            closesocket(clientSock);
+            Disconnect(clientSock, -1);
             delete context;
         }
         else {
-            CloseHandle(hThread);
+            clientThreads.push_back(hThread);
         }
     }
+
+    SetEvent(stopEvent); // stop client thread if some error happens during the network loop
+
+    for (HANDLE thread : clientThreads) {
+        WaitForSingleObject(thread, INFINITE);
+        CloseHandle(thread);
+    }
+    return success;
 }

@@ -5,10 +5,35 @@
 
 const uint16_t MAX_PACKET_SIZE = 65535;
 
-bool SendAll(SOCKET sock, const char* buffer, int length) {
+namespace {
+    bool WaitForSocket(SOCKET sock, bool writing, HANDLE stopEvent) {
+        if (!stopEvent)
+            return true;
+
+        while (WaitForSingleObject(stopEvent, 0) == WAIT_TIMEOUT) {
+            fd_set sockets;
+            FD_ZERO(&sockets);
+            FD_SET(sock, &sockets);
+            timeval timeout{ 0, 200000 };
+            int ready = select(0, writing ? nullptr : &sockets,
+                writing ? &sockets : nullptr, nullptr, &timeout);
+            if (ready == SOCKET_ERROR)
+                return false;
+            if (ready > 0)
+                return WaitForSingleObject(stopEvent, 0) == WAIT_TIMEOUT;
+        }
+        return false;
+    }
+}
+
+bool SendAll(SOCKET sock, const char* buffer, int length, HANDLE stopEvent) {
     int total = 0;
     while (total < length) {
+        if (!WaitForSocket(sock, true, stopEvent))
+            return false;
         int sent = send(sock, buffer + total, length - total, 0);
+        if (sent == SOCKET_ERROR && stopEvent && WSAGetLastError() == WSAEWOULDBLOCK)
+            continue;
         if (sent == SOCKET_ERROR || sent == 0) {
             return false;
         }
@@ -17,10 +42,14 @@ bool SendAll(SOCKET sock, const char* buffer, int length) {
     return true;
 }
 
-bool RecvAll(SOCKET sock, char* buffer, int length) {
+bool RecvAll(SOCKET sock, char* buffer, int length, HANDLE stopEvent) {
     int total = 0;
     while (total < length) {
+        if (!WaitForSocket(sock, false, stopEvent))
+            return false;
         int received = recv(sock, buffer + total, length - total, 0);
+        if (received == SOCKET_ERROR && stopEvent && WSAGetLastError() == WSAEWOULDBLOCK)
+            continue;
         if (received == SOCKET_ERROR || received == 0) {
             return false;
         }
@@ -29,26 +58,26 @@ bool RecvAll(SOCKET sock, char* buffer, int length) {
     return true;
 }
 
-bool SendPacket(SOCKET sock, const Packet& packet) {
+bool SendPacket(SOCKET sock, const Packet& packet, HANDLE stopEvent) {
     if (packet.payload.size() > MAX_PACKET_SIZE - 1)
         return false;
 
     uint16_t length = 1 + (uint16_t)packet.payload.size();
     uint16_t networkLength = htons(length); // em giữ cái này để sau thử test với kiến trúc khác 
 
-    if (!SendAll(sock, (const char*)&networkLength, sizeof(networkLength)))
+    if (!SendAll(sock, (const char*)&networkLength, sizeof(networkLength), stopEvent))
         return false;
 
     uint8_t opcode = (uint8_t)packet.opcode;
-    if (!SendAll(sock, (const char*)&opcode, 1))
+    if (!SendAll(sock, (const char*)&opcode, 1, stopEvent))
         return false;
 
-    return SendAll(sock, packet.payload.data(), (int)length - 1);
+    return SendAll(sock, packet.payload.data(), (int)length - 1, stopEvent);
 }
 
-bool RecvPacket(SOCKET sock, Packet& packet) {
+bool RecvPacket(SOCKET sock, Packet& packet, HANDLE stopEvent) {
     uint16_t networkLength = 0;
-    if (!RecvAll(sock, (char*)&networkLength, sizeof(networkLength)))
+    if (!RecvAll(sock, (char*)&networkLength, sizeof(networkLength), stopEvent))
         return false;
 
     uint16_t length = ntohs(networkLength);
@@ -56,11 +85,11 @@ bool RecvPacket(SOCKET sock, Packet& packet) {
         return false;
 
     uint8_t opcode = 0;
-    if (!RecvAll(sock, (char*)&opcode, 1))
+    if (!RecvAll(sock, (char*)&opcode, 1, stopEvent))
         return false;
 
     std::string payload(length - 1, '\0'); // omit the 1-byte opcode
-    if (!RecvAll(sock, payload.data(), (int)length - 1))
+    if (!RecvAll(sock, payload.data(), (int)length - 1, stopEvent))
         return false;
 
     packet.opcode = (Opcode)opcode;

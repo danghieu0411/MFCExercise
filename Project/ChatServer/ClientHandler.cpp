@@ -17,7 +17,7 @@ DWORD WINAPI ClientThread(LPVOID param) {
     int currentUserId = -1;
     Packet packet;
 
-    while (RecvPacket(sock, packet)) {
+    while (RecvPacket(sock, packet, server->GetStopEvent())) {
         bool sent = true;
 
         switch (packet.opcode) {

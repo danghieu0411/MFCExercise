@@ -26,8 +26,8 @@ struct Packet {
     std::string payload;
 };
 
-bool SendAll(SOCKET sock, const char* buffer, int length);
-bool RecvAll(SOCKET sock, char* buffer, int length);
+bool SendAll(SOCKET sock, const char* buffer, int length, HANDLE stopEvent = nullptr);
+bool RecvAll(SOCKET sock, char* buffer, int length, HANDLE stopEvent = nullptr);
 
-bool SendPacket(SOCKET sock, const Packet& packet);
-bool RecvPacket(SOCKET sock, Packet& packet);
+bool SendPacket(SOCKET sock, const Packet& packet, HANDLE stopEvent = nullptr);
+bool RecvPacket(SOCKET sock, Packet& packet, HANDLE stopEvent = nullptr);

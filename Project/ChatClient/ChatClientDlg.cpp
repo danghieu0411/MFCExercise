@@ -134,7 +134,7 @@ void CChatClientDlg::UpdateContacts() {
             m_contacts.SetItemState(row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
     }
     m_rebuilding = false;
-    m_contacts.Invalidate();
+    m_contacts.Invalidate(); // tell windows to re-draw the list control
 }
 
 void CChatClientDlg::UpdateControls() {
@@ -148,7 +148,7 @@ void CChatClientDlg::UpdateControls() {
 void CChatClientDlg::RequestFinished() {
     m_request = Request::None;
     if (m_refreshContacts) {
-        m_refreshContacts = false;
+        m_refreshContacts = false; // call GetContact() another time to get new message
         GetContacts();
     }
     else {
@@ -157,7 +157,6 @@ void CChatClientDlg::RequestFinished() {
 }
 
 void CChatClientDlg::ProcessPacket(const Packet& packet) {
-    // Server pushes a sender ID. The next contacts query provides the username.
     if (packet.opcode == Opcode::NewMessage) {
         int senderId = std::stoi(packet.payload);
         if (senderId == ContactId(m_currentUsername)) {
@@ -167,7 +166,7 @@ void CChatClientDlg::ProcessPacket(const Packet& packet) {
         else {
             m_unread.insert(senderId);
         }
-        m_refreshContacts = true;
+        m_refreshContacts = true; // in case client is still getting old messages and receive another new message, this variable reminds client to call GetContact() later to get it
         if (m_request == Request::None)
             RequestFinished();
         return;
