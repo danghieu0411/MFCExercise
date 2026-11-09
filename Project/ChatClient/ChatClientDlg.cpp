@@ -24,6 +24,8 @@ void CChatClientDlg::DoDataExchange(CDataExchange* pDX) {
     DDX_Control(pDX, IDC_LIST_CONTACTS, m_contacts);
     DDX_Control(pDX, IDC_RICH_HISTORY, m_history);
     DDX_Control(pDX, IDC_EDIT_MESSAGE, m_messageInput);
+    DDX_Control(pDX, IDC_PIC_MY_AVATAR, m_myAvatar);
+    DDX_Control(pDX, IDC_PIC_CHAT_AVATAR, m_chatAvatar);
 }
 
 BEGIN_MESSAGE_MAP(CChatClientDlg, CDialogEx)
@@ -33,17 +35,26 @@ BEGIN_MESSAGE_MAP(CChatClientDlg, CDialogEx)
     ON_MESSAGE(WM_START_LOGIN, &CChatClientDlg::OnStartLogin)
     ON_MESSAGE(WM_TCP_PACKET, &CChatClientDlg::OnTcpPacket)
     ON_MESSAGE(WM_TCP_DISCONNECTED, &CChatClientDlg::OnTcpDisconnected)
-    ON_BN_CLICKED(IDC_BTN_SEND, &CChatClientDlg::OnSend)
-    ON_BN_CLICKED(IDC_BTN_NEW_CHAT, &CChatClientDlg::OnNewChat)
-    ON_NOTIFY(LVN_ITEMCHANGED, IDC_LIST_CONTACTS, &CChatClientDlg::OnContactChanged)
-    ON_NOTIFY(NM_CUSTOMDRAW, IDC_LIST_CONTACTS, &CChatClientDlg::OnContactDraw)
+    ON_BN_CLICKED(IDC_BTN_SEND, &CChatClientDlg::OnBnClickedBtnSend)
+    ON_BN_CLICKED(IDC_BTN_NEW_CHAT, &CChatClientDlg::OnBnClickedBtnNewChat)
+    ON_NOTIFY(LVN_ITEMCHANGED, IDC_LIST_CONTACTS, &CChatClientDlg::OnLvnItemchangedListContacts)
+    ON_NOTIFY(NM_CUSTOMDRAW, IDC_LIST_CONTACTS, &CChatClientDlg::OnNMCustomdrawListContacts)
 END_MESSAGE_MAP()
+
 
 BOOL CChatClientDlg::OnInitDialog() {
     CDialogEx::OnInitDialog();
 
     SetIcon(m_hIcon, TRUE);
     SetIcon(m_hIcon, FALSE);
+
+    m_avatarImages.Create(32, 32, ILC_COLOR32 | ILC_MASK, 5, 0);
+    m_avatarImages.Add(AfxGetApp()->LoadIcon(IDI_AVATAR_ROBOT));
+    m_avatarImages.Add(AfxGetApp()->LoadIcon(IDI_AVATAR_DOG));
+    m_avatarImages.Add(AfxGetApp()->LoadIcon(IDI_AVATAR_CAT));
+    m_avatarImages.Add(AfxGetApp()->LoadIcon(IDI_AVATAR_LEAF));
+    m_avatarImages.Add(AfxGetApp()->LoadIcon(IDI_AVATAR_SUN));
+    m_contacts.SetImageList(&m_avatarImages, LVSIL_SMALL);
 
     m_contacts.SetExtendedStyle(m_contacts.GetExtendedStyle() | LVS_EX_FULLROWSELECT);
     CRect rect;
@@ -57,7 +68,6 @@ BOOL CChatClientDlg::OnInitDialog() {
         m_boldFont.CreateFontIndirect(&lf);
     }
 
-    m_history.SetReadOnly(TRUE);
     m_history.SetBackgroundColor(FALSE, RGB(255, 255, 255));
     UpdateControls();
 
@@ -65,6 +75,8 @@ BOOL CChatClientDlg::OnInitDialog() {
     PostMessage(WM_START_LOGIN);
     return TRUE;
 }
+
+void CChatClientDlg::OnOK() {}
 
 LRESULT CChatClientDlg::OnStartLogin(WPARAM, LPARAM) {
     if (!m_client.Connect("127.0.0.1", 1206, m_hWnd)) {
@@ -84,14 +96,16 @@ LRESULT CChatClientDlg::OnStartLogin(WPARAM, LPARAM) {
     }
 
     m_myUsername = login.Username();
+    m_myUserId = login.UserId();
     SetDlgItemText(IDC_USERNAME, L"username: " + FromUtf8(m_myUsername));
+    m_myAvatar.SetIcon(AvatarIcon(login.Avatar()));
     GetContacts();
     return 0;
 }
 
 void CChatClientDlg::GetContacts() {
     if (!m_client.Send({ Opcode::GetContacts, "" })) {
-        AfxMessageBox(L"Cannot request contacts.");
+        OnTcpDisconnected(0, 0);
         return;
     }
     m_request = Request::Contacts;
@@ -103,24 +117,18 @@ void CChatClientDlg::GetMessages(const std::string& username) {
     if (username.empty())
         return;
 
-    if (!m_client.Send({ Opcode::GetMessages, username + "|||0" })) {
-        AfxMessageBox(L"Cannot request messages.");
+    int lastId = username == m_currentUsername ? m_lastMessageId : 0;
+
+    std::string payload = username + "|||" + std::to_string(lastId);
+
+    if (!m_client.Send({ Opcode::GetMessages, payload })) {
+        OnTcpDisconnected(0, 0);
         return;
     }
     m_request = Request::Messages;
     m_loadingUsername = username;
-    m_messages.clear();
-    m_lastMessageId = 0;
-    m_batchCount = 0;
+    m_incomingMessages.clear();
     UpdateControls();
-}
-
-int CChatClientDlg::ContactId(const std::string& username) const {
-    for (const auto& contact : m_contactList) {
-        if (contact.username == username)
-            return contact.id;
-    }
-    return -1;
 }
 
 void CChatClientDlg::UpdateContacts() {
@@ -128,7 +136,13 @@ void CChatClientDlg::UpdateContacts() {
     m_contacts.DeleteAllItems();
     for (int i = 0; i < (int)m_contactList.size(); ++i) {
         const auto& contact = m_contactList[i];
-        int row = m_contacts.InsertItem(i, FromUtf8(contact.username));
+        int image = 0;
+        if (contact.avatar == "dog") image = 1;
+        else if (contact.avatar == "cat") image = 2;
+        else if (contact.avatar == "leaf") image = 3;
+        else if (contact.avatar == "sun") image = 4;
+
+        int row = m_contacts.InsertItem(i, FromUtf8(contact.username), image);
         m_contacts.SetItemData(row, (DWORD_PTR)contact.id);
         if (contact.username == m_currentUsername)
             m_contacts.SetItemState(row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
@@ -138,18 +152,23 @@ void CChatClientDlg::UpdateContacts() {
 }
 
 void CChatClientDlg::UpdateControls() {
-    bool ready = !m_myUsername.empty() && m_request == Request::None;
+    bool ready = m_myUserId > 0 &&
+        m_request == Request::None && !m_closing;
+    bool chatting = ready && m_currentContactId > 0;
     m_contacts.EnableWindow(ready);
     GetDlgItem(IDC_BTN_NEW_CHAT)->EnableWindow(ready);
-    GetDlgItem(IDC_BTN_SEND)->EnableWindow(ready && !m_currentUsername.empty());
-    m_messageInput.EnableWindow(ready && !m_currentUsername.empty());
+    GetDlgItem(IDC_BTN_SEND)->EnableWindow(chatting);
+    m_messageInput.EnableWindow(chatting);
 }
 
 void CChatClientDlg::RequestFinished() {
     m_request = Request::None;
-    if (m_refreshContacts) {
-        m_refreshContacts = false; // call GetContact() another time to get new message
-        GetContacts();
+
+    if (m_closing) {
+        return;
+    }
+    if (m_refreshPending && IsWindowEnabled()) {
+        RefreshChat();
     }
     else {
         UpdateControls();
@@ -157,36 +176,38 @@ void CChatClientDlg::RequestFinished() {
 }
 
 void CChatClientDlg::ProcessPacket(const Packet& packet) {
+    if (m_closing) return;
+
     if (packet.opcode == Opcode::NewMessage) {
         int senderId = std::stoi(packet.payload);
-        if (senderId == ContactId(m_currentUsername)) {
-            m_refreshMessagesAfterContacts = true;
-            m_unread.erase(senderId);
-        }
-        else {
-            m_unread.insert(senderId);
-        }
-        m_refreshContacts = true; // in case client is still getting old messages and receive another new message, this variable reminds client to call GetContact() later to get it
-        if (m_request == Request::None)
-            RequestFinished();
+        m_unread.insert(senderId);
+        m_contacts.Invalidate();
+        RefreshChat();
+        return;
+    }
+
+    if (packet.opcode == Opcode::Error) {
+        m_incomingMessages.clear();
+        UpdateContacts();
+        AfxMessageBox(L"Request failed: " + FromUtf8(packet.payload));
+        RequestFinished();
         return;
     }
 
     if (m_request == Request::Contacts) {
         if (packet.opcode == Opcode::ContactItem) {
-            size_t a = packet.payload.find("|||");
-            size_t b = packet.payload.find("|||", a + 3);
+            size_t first = packet.payload.find("|||");
+            size_t second = packet.payload.find("|||", first + 3);
             ChatContact contact{};
-            contact.id = std::stoi(packet.payload.substr(0, a));
-            contact.username = packet.payload.substr(a + 3, b - a - 3);
-            contact.lastMessageId = std::stoi(packet.payload.substr(b + 3));
+            contact.id = std::stoi(packet.payload.substr(0, first));
+            contact.username = packet.payload.substr(first + 3, second - first - 3);
+            contact.avatar = packet.payload.substr(second + 3);
             m_incomingContacts.push_back(contact);
         }
         else if (packet.opcode == Opcode::ContactsEnd) {
-            m_contactList = m_incomingContacts; // Already sorted by the server
+            m_contactList = m_incomingContacts; // already sorted by the server
             UpdateContacts();
-            if (m_refreshMessagesAfterContacts && !m_currentUsername.empty()) {
-                m_refreshMessagesAfterContacts = false;
+            if (!m_currentUsername.empty()) {
                 GetMessages(m_currentUsername);
             }
             else {
@@ -206,38 +227,48 @@ void CChatClientDlg::ProcessPacket(const Packet& packet) {
             msg.senderId = std::stoi(s.substr(a + 3, b - a - 3));
             msg.sentAt = std::stoll(s.substr(c + 3, d - c - 3));
             msg.text = s.substr(d + 3); // Content itself may contain "|||".
-            m_messages.push_back(msg);
-            m_lastMessageId = msg.id;
-            ++m_batchCount;
+            m_incomingMessages.push_back(msg);
         }
         else if (packet.opcode == Opcode::MessagesEnd) {
-            // The server sends at most 100 messages per request.
-            if (m_batchCount == 100) {
-                m_batchCount = 0;
-                m_client.Send({ Opcode::GetMessages,
-                    m_loadingUsername + "|||" + std::to_string(m_lastMessageId) });
-                return;
+            size_t pos = packet.payload.find("|||");
+            int contactId = std::stoi(packet.payload.substr(0, pos));
+            std::string avatar = packet.payload.substr(pos + 3);
+
+            bool changed = m_loadingUsername != m_currentUsername;
+            size_t firstIndex = changed ? 0 : m_messages.size();
+
+            if (changed) {
+                m_messages.clear();
+                m_lastMessageId = 0;
             }
+
+            m_messages.insert(
+                m_messages.end(),
+                m_incomingMessages.begin(),
+                m_incomingMessages.end()
+            );
+
+            m_currentContactId = contactId;
             m_currentUsername = m_loadingUsername;
-            m_unread.erase(ContactId(m_currentUsername));
-            ShowMessages();
-            UpdateContacts();
-            RequestFinished();
-        }
-        else if (packet.opcode == Opcode::Error) {
-            AfxMessageBox(L"Cannot open conversation: " + FromUtf8(packet.payload));
+            m_chatAvatar.SetIcon(AvatarIcon(avatar));
+
+            if (!m_messages.empty()) {
+                m_lastMessageId = m_messages.back().id;
+            }
+
+            if (changed || !m_incomingMessages.empty()) {
+                ShowMessages(firstIndex);
+            }
+            m_incomingMessages.clear();
+            m_unread.erase(m_currentContactId);
             UpdateContacts();
             RequestFinished();
         }
     }
     else if (m_request == Request::Send) {
-        if (packet.opcode == Opcode::Success) {
+        if (packet.opcode == Opcode::MessageSent) {
             m_messageInput.SetWindowText(L"");
-            m_refreshMessagesAfterContacts = true;
-            GetContacts();
-        }
-        else if (packet.opcode == Opcode::Error) {
-            AfxMessageBox(L"Send failed: " + FromUtf8(packet.payload));
+            m_refreshPending = true;
             RequestFinished();
         }
     }
@@ -264,7 +295,7 @@ LRESULT CChatClientDlg::OnTcpDisconnected(WPARAM, LPARAM) {
     return 0;
 }
 
-void CChatClientDlg::OnContactChanged(NMHDR* hdr, LRESULT* result) {
+void CChatClientDlg::OnLvnItemchangedListContacts(NMHDR* hdr, LRESULT* result) {
     *result = 0;
     NMLISTVIEW* item = (NMLISTVIEW*)hdr;
     if (m_rebuilding || m_request != Request::None || m_myUsername.empty())
@@ -283,7 +314,7 @@ void CChatClientDlg::OnContactChanged(NMHDR* hdr, LRESULT* result) {
     }
 }
 
-void CChatClientDlg::OnContactDraw(NMHDR* hdr, LRESULT* result) {
+void CChatClientDlg::OnNMCustomdrawListContacts(NMHDR* hdr, LRESULT* result) {
     NMLVCUSTOMDRAW* draw = (NMLVCUSTOMDRAW*)hdr;
     if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) {
         *result = CDRF_NOTIFYITEMDRAW;
@@ -303,22 +334,30 @@ void CChatClientDlg::OnContactDraw(NMHDR* hdr, LRESULT* result) {
     }
 }
 
-void CChatClientDlg::OnNewChat() {
-    if (m_request != Request::None)
+void CChatClientDlg::OnBnClickedBtnNewChat() {
+    if ( m_closing || m_request != Request::None)
         return;
     CNewChatDlg dlg(this);
-    if (dlg.DoModal() == IDOK) {
-        std::string username = ToUtf8(dlg.Username());
-        if (username == m_myUsername) {
-            AfxMessageBox(L"Choose a different user.");
-            return;
-        }
-        // GetMessages checks whether this username actually exists.
-        GetMessages(username);
+
+    INT_PTR result = dlg.DoModal();
+
+    if (m_closing) return;
+
+    if (result != IDOK) {
+        RequestFinished();
+        return;
     }
+
+    std::string username = ToUtf8(dlg.Username());
+    if (username == m_myUsername) {
+        AfxMessageBox(L"Choose a different user.");
+        RequestFinished();
+        return;
+    }
+    GetMessages(username);
 }
 
-void CChatClientDlg::OnSend() {
+void CChatClientDlg::OnBnClickedBtnSend() {
     if (m_request != Request::None || m_currentUsername.empty())
         return;
 
@@ -331,7 +370,7 @@ void CChatClientDlg::OnSend() {
 
     if (!m_client.Send({ Opcode::SendMessage,
         m_currentUsername + "|||" + ToUtf8(message) })) {
-        AfxMessageBox(L"Cannot send message.");
+        OnTcpDisconnected(0, 0);
         return;
     }
 
@@ -339,7 +378,7 @@ void CChatClientDlg::OnSend() {
     UpdateControls();
 }
 
-void CChatClientDlg::AppendHistory(const CString& text, COLORREF color, WORD align) {
+void CChatClientDlg::AppendHistory(const CString& text, COLORREF color, WORD align, COLORREF background) {
     m_history.SetSel(-1, -1);
     PARAFORMAT pf{};
     pf.cbSize = sizeof(pf);
@@ -347,33 +386,74 @@ void CChatClientDlg::AppendHistory(const CString& text, COLORREF color, WORD ali
     pf.wAlignment = align;
     m_history.SetParaFormat(pf);
 
-    CHARFORMAT cf{};
+    CHARFORMAT2 cf{};
     cf.cbSize = sizeof(cf);
-    cf.dwMask = CFM_COLOR;
+    cf.dwMask = CFM_COLOR | CFM_BACKCOLOR;
     cf.crTextColor = color;
+    cf.crBackColor = background;
     m_history.SetSelectionCharFormat(cf);
     m_history.ReplaceSel(text);
 }
 
-void CChatClientDlg::ShowMessages() {
+void CChatClientDlg::ShowMessage(const ChatEntry& message) {
+    bool mine = message.senderId == m_myUserId;
+    CString sender = mine ? L"You" : FromUtf8(m_currentUsername);
+
+    CTime time((time_t)message.sentAt);
+    CString header = sender + L"  " + time.Format(L"%d/%m/%Y %H:%M");
+    WORD alignment = mine ? PFA_RIGHT : PFA_LEFT;
+
+    AppendHistory(header + L"\r\n", RGB(120, 120, 120), alignment);
+    COLORREF background = mine ? RGB(220, 240, 255) : RGB(240, 240, 240);
+    AppendHistory(
+        FromUtf8(message.text) + L"\r\n\r\n",
+        RGB(30, 30, 30),
+        alignment,
+        background
+    );
+    AppendHistory(L"\r\n\r\n", RGB(30, 30, 30), alignment);
+}
+
+void CChatClientDlg::ShowMessages(size_t firstIndex) {
     m_history.SetReadOnly(FALSE);
-    m_history.SetWindowText(L"");
-    SetDlgItemText(IDC_STATIC_CHAT_TITLE, L"Chat with: " + FromUtf8(m_currentUsername));
-    int otherId = ContactId(m_currentUsername);
 
-    for (const auto& msg : m_messages) {
-        bool fromOther = msg.senderId == otherId;
-        CString sender = fromOther ? FromUtf8(m_currentUsername) : L"You";
-        CTime time((time_t)msg.sentAt);
-        CString header = sender + L"  " + time.Format(L"%d/%m/%Y %H:%M");
-        WORD alignment = fromOther ? PFA_LEFT : PFA_RIGHT;
-
-        AppendHistory(header + L"\r\n", RGB(120, 120, 120), alignment);
-        AppendHistory(FromUtf8(msg.text) + L"\r\n\r\n", RGB(30, 30, 30), alignment);
+    if (firstIndex == 0) {
+        m_history.SetWindowText(L"");
+        SetDlgItemText(
+            IDC_STATIC_CHAT_TITLE,
+            L"Chat with: " + FromUtf8(m_currentUsername)
+        );
     }
+
+    for (size_t i = firstIndex; i < m_messages.size(); ++i)
+        ShowMessage(m_messages[i]);
+
     m_history.SetSel(-1, -1);
     m_history.LineScroll(m_history.GetLineCount());
     m_history.SetReadOnly(TRUE);
+}
+
+HICON CChatClientDlg::AvatarIcon(const std::string& avatar) const {
+    UINT resource = IDI_AVATAR_ROBOT;
+    if (avatar == "dog") resource = IDI_AVATAR_DOG;
+    else if (avatar == "cat") resource = IDI_AVATAR_CAT;
+    else if (avatar == "leaf") resource = IDI_AVATAR_LEAF;
+    else if (avatar == "sun") resource = IDI_AVATAR_SUN;
+    return AfxGetApp()->LoadIcon(resource);
+}
+
+void CChatClientDlg::RefreshChat() {
+    if (m_closing || m_myUserId <= 0) {
+        return;
+    }
+    m_refreshPending = true;
+
+    if (m_request != Request::None || !IsWindowEnabled()) {
+        return;
+    }
+
+    m_refreshPending = false;
+    GetContacts();
 }
 
 void CChatClientDlg::OnDestroy() {

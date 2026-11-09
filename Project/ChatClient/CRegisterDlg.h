@@ -12,10 +12,17 @@ public:
 protected:
     virtual void DoDataExchange(CDataExchange* pDX);
     virtual void OnCancel();
-    afx_msg void OnRegister();
+    virtual void OnOK();
+    afx_msg void OnBnClickedBtnRegisterSubmit();
     DECLARE_MESSAGE_MAP()
 
 private:
     TcpClient& m_client;
     bool m_waiting = false;
+
+    CComboBox m_avatarCombo;
+    CStatic m_avatarPreview;
+public:
+    virtual BOOL OnInitDialog();
+    afx_msg void OnCbnSelchangeComboAvatar();
 };

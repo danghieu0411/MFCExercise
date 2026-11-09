@@ -92,5 +92,20 @@
     <Image Include="res\ChatClient.ico">
       <Filter>Resource Files</Filter>
     </Image>
+    <Image Include="res\avatar_cat.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="res\avatar_dog.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="res\avatar_leaf.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="res\avatar_robot.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="res\avatar_sun.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
   </ItemGroup>
 </Project>

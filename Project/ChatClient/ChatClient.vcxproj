@@ -228,6 +228,11 @@
     <None Include="res\ChatClient.rc2" />
   </ItemGroup>
   <ItemGroup>
+    <Image Include="res\avatar_cat.ico" />
+    <Image Include="res\avatar_dog.ico" />
+    <Image Include="res\avatar_leaf.ico" />
+    <Image Include="res\avatar_robot.ico" />
+    <Image Include="res\avatar_sun.ico" />
     <Image Include="res\ChatClient.ico" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

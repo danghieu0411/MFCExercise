@@ -25,5 +25,10 @@ void CNewChatDlg::OnOK() {
         AfxMessageBox(L"Enter a username.");
         return;
     }
+    if (m_username.Find(L'|') >= 0) {
+        AfxMessageBox(L"Username cannot contain '|'.");
+        return;
+    }
+
     CDialogEx::OnOK();
 }

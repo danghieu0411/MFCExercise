@@ -53,14 +53,15 @@ bool Database::Initialize() {
     return sqlite3_exec(m_db, sql, nullptr, nullptr, nullptr) == SQLITE_OK;
 }
 
-bool Database::RegisterUser(const std::string& username, const std::string& password) {
+bool Database::RegisterUser(const std::string& username,
+    const std::string& password, const std::string& avatar) {
     CriticalSectionGuard lock(m_dbLock);
     SHA256 sha256;
     std::string hash = sha256(password);
 
     const char* sql =
-        "INSERT INTO users (username, password_hash) "
-        "VALUES (?, ?);";
+        "INSERT INTO users (username, password_hash, avatar) "
+        "VALUES (?, ?, ?);";
 
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK)
@@ -68,6 +69,12 @@ bool Database::RegisterUser(const std::string& username, const std::string& pass
 
     sqlite3_bind_text(stmt, 1, username.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 2, hash.c_str(), -1, SQLITE_TRANSIENT);
+    if (avatar.empty()) {
+        sqlite3_bind_null(stmt, 3);
+    }
+    else {
+        sqlite3_bind_text(stmt, 3, avatar.c_str(), -1, SQLITE_TRANSIENT);
+    }
 
     bool success = (sqlite3_step(stmt) == SQLITE_DONE);
     sqlite3_finalize(stmt);
@@ -125,6 +132,23 @@ bool Database::FindUserId(const std::string& username, int& userId)
     return found;
 }
 
+std::string Database::GetAvatar(int userId) {
+    CriticalSectionGuard lock(m_dbLock);
+    std::string avatar = "robot";
+    const char* sql = "SELECT COALESCE(avatar, 'robot') FROM users WHERE id = ?;";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK)
+        return avatar;
+
+    sqlite3_bind_int(stmt, 1, userId);
+    if (sqlite3_step(stmt) == SQLITE_ROW)
+        avatar = (const char*)sqlite3_column_text(stmt, 0);
+
+    sqlite3_finalize(stmt);
+    return avatar;
+}
+
 bool Database::InsertMessage(int senderId, int receiverId,
     const std::string& content, int64_t sentAt)
 {
@@ -147,9 +171,9 @@ bool Database::InsertMessage(int senderId, int receiverId,
     return success;
 }
 
-std::vector<ChatMessage> Database::GetMessages(int userId, int otherUserId, int lastId) {
+bool Database::GetMessages(int userId, int otherUserId, int lastId, std::vector<ChatMessage>& messages) {
     CriticalSectionGuard lock(m_dbLock);
-    std::vector<ChatMessage> messages;
+    messages.clear();
 
     const char* sql =
         "SELECT id, sender_id, receiver_id, content, sent_at "
@@ -157,11 +181,11 @@ std::vector<ChatMessage> Database::GetMessages(int userId, int otherUserId, int 
         "WHERE ((sender_id = ? AND receiver_id = ?) "
         "OR (sender_id = ? AND receiver_id = ?)) "
         "AND id > ? "
-        "ORDER BY id ASC LIMIT 100;"; // demo app so I limit it to only 100 entries.
+        "ORDER BY id ASC;";
 
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK)
-        return messages;
+        return false;
 
     sqlite3_bind_int(stmt, 1, userId);
     sqlite3_bind_int(stmt, 2, otherUserId);
@@ -169,7 +193,8 @@ std::vector<ChatMessage> Database::GetMessages(int userId, int otherUserId, int 
     sqlite3_bind_int(stmt, 4, userId);
     sqlite3_bind_int(stmt, 5, lastId);
 
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
+    int result;
+    while ((result = sqlite3_step(stmt)) == SQLITE_ROW) {
         ChatMessage msg{};
         msg.id = sqlite3_column_int(stmt, 0);
         msg.senderId = sqlite3_column_int(stmt, 1);
@@ -184,39 +209,50 @@ std::vector<ChatMessage> Database::GetMessages(int userId, int otherUserId, int 
     }
 
     sqlite3_finalize(stmt);
-    return messages;
+
+    if (result != SQLITE_DONE) {
+        messages.clear();
+        return false;
+    }
+    return true;
 }
 
-std::vector<ContactInfo> Database::GetContacts(int userId) {
+bool Database::GetContacts(int userId, std::vector<ContactInfo>& contacts) {
     CriticalSectionGuard lock(m_dbLock);
-    std::vector<ContactInfo> contacts;
+    contacts.clear();
 
     const char* sql =
-        "SELECT u.id, u.username, MAX(m.id) AS last_id "
+        "SELECT u.id, u.username, COALESCE(u.avatar, 'robot'), MAX(m.id) AS last_id " // COALESCE to use default value for NULL
         "FROM users u "
         "JOIN messages m ON "
         "(m.sender_id = ? AND m.receiver_id = u.id) "
         "OR (m.receiver_id = ? AND m.sender_id = u.id) "
-        "GROUP BY u.id, u.username "
+        "GROUP BY u.id, u.username, u.avatar "
         "ORDER BY last_id DESC, u.username COLLATE NOCASE;"; // 'COLLATE NOCASE' mean the fallback order username will be case-insensitive
 
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK)
-        return contacts;
+        return false;
 
     for (int i = 1; i <= 2; ++i)
         sqlite3_bind_int(stmt, i, userId);
 
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
+    int result;
+    while ((result = sqlite3_step(stmt)) == SQLITE_ROW) {
         ContactInfo contact{};
         contact.userId = sqlite3_column_int(stmt, 0);
         const char* name = (const char*)sqlite3_column_text(stmt, 1);
         if (name)
             contact.username = name;
-        contact.lastMessageId = sqlite3_column_int(stmt, 2);
+        contact.avatar = (const char*)sqlite3_column_text(stmt, 2);
         contacts.push_back(contact);
     }
 
     sqlite3_finalize(stmt);
-    return contacts;
+
+    if (result != SQLITE_DONE) {
+        contacts.clear();
+        return false;
+    }
+    return true;
 }

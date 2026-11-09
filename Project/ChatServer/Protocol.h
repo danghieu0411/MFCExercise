@@ -12,13 +12,16 @@ enum class Opcode : uint8_t {
     GetMessages = 0x05,
     GetContacts = 0x06,
 
-    Success = 0x80,
+    RegisterOk = 0x80,
     Error = 0x81,
     MessageItem = 0x82,
     MessagesEnd = 0x83,
     NewMessage = 0x84,
     ContactItem = 0x85,
-    ContactsEnd = 0x86
+    ContactsEnd = 0x86,
+    LoginOk = 0x87,
+    MessageSent = 0x88,
+    LogoutOk = 0x89
 };
 
 struct Packet {

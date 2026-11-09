@@ -18,17 +18,28 @@ void CLoginDlg::DoDataExchange(CDataExchange* pDX) {
 }
 
 BEGIN_MESSAGE_MAP(CLoginDlg, CDialogEx)
-    ON_BN_CLICKED(IDC_BTN_LOGIN, &CLoginDlg::OnLogin)
-    ON_BN_CLICKED(IDC_BTN_REGISTER, &CLoginDlg::OnRegister)
+    ON_BN_CLICKED(IDC_BTN_LOGIN, &CLoginDlg::OnBnClickedBtnLogin)
+    ON_BN_CLICKED(IDC_BTN_REGISTER, &CLoginDlg::OnBnClickedBtnRegister)
 END_MESSAGE_MAP()
 
-void CLoginDlg::OnLogin() {
+void CLoginDlg::OnOK() {
+    OnBnClickedBtnLogin();
+}
+
+void CLoginDlg::OnBnClickedBtnLogin() {
+    if (m_waiting) return;
     CString username, password;
     GetDlgItemText(IDC_EDIT_USERNAME, username);
     GetDlgItemText(IDC_EDIT_PASSWORD, password);
+    username.Trim();
 
     if (username.IsEmpty() || password.IsEmpty()) {
         AfxMessageBox(L"Enter username and password.");
+        return;
+    }
+
+    if (username.Find(L'|') >= 0) {
+        AfxMessageBox(L"Username cannot contain '|'.");
         return;
     }
 
@@ -38,7 +49,7 @@ void CLoginDlg::OnLogin() {
         return;
     }
 
-    m_attemptUsername = name;
+    m_username = name;
     m_waiting = true;
 
     // temporarily disable these buttons, prevent user from repeatedly press login
@@ -46,7 +57,7 @@ void CLoginDlg::OnLogin() {
     GetDlgItem(IDC_BTN_REGISTER)->EnableWindow(FALSE);
 }
 
-void CLoginDlg::OnRegister() {
+void CLoginDlg::OnBnClickedBtnRegister() {
     CRegisterDlg dlg(m_client, this);
     m_register = &dlg;
     dlg.DoModal();
@@ -61,17 +72,23 @@ void CLoginDlg::HandleResponse(const Packet& packet) {
     if (!m_waiting)
         return;
 
+    if (packet.opcode != Opcode::LoginOk && packet.opcode != Opcode::Error) {
+        return;
+    }
+
     m_waiting = false;
     GetDlgItem(IDC_BTN_LOGIN)->EnableWindow(TRUE);
     GetDlgItem(IDC_BTN_REGISTER)->EnableWindow(TRUE);
 
-    if (packet.opcode == Opcode::Success) {
-        m_username = m_attemptUsername;
-        EndDialog(IDOK);
-    }
-    else if (packet.opcode == Opcode::Error) {
+    if (packet.opcode == Opcode::Error) {
         AfxMessageBox(L"Login failed: " + FromUtf8(packet.payload));
+        return;
     }
+
+    size_t pos = packet.payload.find("|||");
+    m_userId = std::stoi(packet.payload.substr(0, pos));
+    m_avatar = packet.payload.substr(pos + 3);
+    EndDialog(IDOK);
 }
 
 void CLoginDlg::CloseOnDisconnect() {

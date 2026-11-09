@@ -17,7 +17,7 @@ struct ChatMessage {
 struct ContactInfo {
     int userId;
     std::string username;
-    int lastMessageId;
+    std::string avatar;
 };
 
 class Database {
@@ -30,7 +30,7 @@ public:
     bool Initialize();
 
     bool RegisterUser(const std::string& username,
-        const std::string& password);
+        const std::string& password, const std::string& avatar);
 
     bool VerifyUser(const std::string& username,
         const std::string& password,
@@ -39,14 +39,16 @@ public:
     bool FindUserId(const std::string& username,
         int& userId);
 
+    std::string GetAvatar(int userId);
+
     bool InsertMessage(int senderId, int receiverId,
         const std::string& content,
         int64_t sentAt);
 
-    std::vector<ChatMessage> GetMessages(
-        int userId, int otherUserId, int lastId);
+    bool GetMessages(
+        int userId, int otherUserId, int lastId, std::vector<ChatMessage>& messages);
 
-    std::vector<ContactInfo> GetContacts(int userId);
+    bool GetContacts(int userId, std::vector<ContactInfo>& contacts);
 
 private:
     sqlite3* m_db = nullptr;

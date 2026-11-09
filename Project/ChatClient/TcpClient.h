@@ -20,5 +20,6 @@ private:
 
     SOCKET m_socket = INVALID_SOCKET;
     HANDLE m_thread = nullptr;
+    HANDLE m_stopEvent = nullptr;
     HWND m_hWnd = nullptr;
 };

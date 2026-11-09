@@ -22,14 +22,21 @@ DWORD WINAPI ClientThread(LPVOID param) {
 
         switch (packet.opcode) {
         case Opcode::Register: {
-            size_t pos = packet.payload.find("|||");
-            if (pos == std::string::npos) {
+            size_t first = packet.payload.find("|||");
+            if (first == std::string::npos) {
                 sent = server->SendToClient(sock, { Opcode::Error, "INVALID_PAYLOAD" });
                 break;
             }
 
-            std::string username = packet.payload.substr(0, pos);
-            std::string password = packet.payload.substr(pos + 3);
+            size_t second = packet.payload.find("|||", first + 3);
+            if (second == std::string::npos) {
+                sent = server->SendToClient(sock, { Opcode::Error, "INVALID_PAYLOAD" });
+                break;
+            }
+
+            std::string username = packet.payload.substr(0, first);
+            std::string avatar = packet.payload.substr(first + 3, second - first - 3);
+            std::string password = packet.payload.substr(second + 3);
             if (username.empty() || password.empty() ||
                 username.find('\0') != std::string::npos ||
                 password.find('\0') != std::string::npos) {
@@ -37,9 +44,9 @@ DWORD WINAPI ClientThread(LPVOID param) {
                 break;
             }
 
-            bool success = db.RegisterUser(username, password);
+            bool success = db.RegisterUser(username, password, avatar);
             sent = server->SendToClient(sock, {
-                success ? Opcode::Success : Opcode::Error,
+                success ? Opcode::RegisterOk : Opcode::Error,
                 success ? "" : "REGISTER_FAILED"
             });
             break;
@@ -74,7 +81,10 @@ DWORD WINAPI ClientThread(LPVOID param) {
             }
 
             currentUserId = userId;
-            sent = server->SendToClient(sock, { Opcode::Success, "" });
+            sent = server->SendToClient(sock, {
+                Opcode::LoginOk,
+                std::to_string(currentUserId) + "|||" + db.GetAvatar(currentUserId)
+            });
             break;
         }
 
@@ -86,7 +96,7 @@ DWORD WINAPI ClientThread(LPVOID param) {
 
             server->RemoveOnlineUser(currentUserId, sock);
             currentUserId = -1;
-            sent = server->SendToClient(sock, { Opcode::Success, "" });
+            sent = server->SendToClient(sock, { Opcode::LogoutOk, "" });
             break;
         }
 
@@ -122,7 +132,7 @@ DWORD WINAPI ClientThread(LPVOID param) {
                 break;
             }
 
-            sent = server->SendToClient(sock, { Opcode::Success, "" });
+            sent = server->SendToClient(sock, { Opcode::MessageSent, "" });
             server->NotifyUser(receiverId, { Opcode::NewMessage, std::to_string(currentUserId) });
             break;
         }
@@ -154,7 +164,13 @@ DWORD WINAPI ClientThread(LPVOID param) {
                 break;
             }
 
-            auto messages = db.GetMessages(currentUserId, otherUserId, lastId);
+            std::vector<ChatMessage> messages;
+            if (!db.GetMessages(currentUserId, otherUserId, lastId, messages)) {
+                sent = server->SendToClient(sock, {
+                    Opcode::Error, "DATABASE_ERROR"
+                    });
+                break;
+            }
             for (const auto& msg : messages) {
                 std::string text = std::to_string(msg.id) + "|||" +
                     std::to_string(msg.senderId) + "|||" +
@@ -168,7 +184,10 @@ DWORD WINAPI ClientThread(LPVOID param) {
             }
 
             if (sent)
-                sent = server->SendToClient(sock, { Opcode::MessagesEnd, "" });
+                sent = server->SendToClient(sock, {
+                    Opcode::MessagesEnd,
+                    std::to_string(otherUserId) + "|||" + db.GetAvatar(otherUserId)
+                });
             break;
         }
 
@@ -178,11 +197,16 @@ DWORD WINAPI ClientThread(LPVOID param) {
                 break;
             }
 
-            auto contacts = db.GetContacts(currentUserId);
+            std::vector<ContactInfo> contacts;
+            if (!db.GetContacts(currentUserId, contacts)) {
+                sent = server->SendToClient(sock, {
+                    Opcode::Error, "DATABASE_ERROR"
+                    });
+                break;
+            }
             for (const auto& contact : contacts) {
                 std::string text = std::to_string(contact.userId) + "|||" +
-                    contact.username + "|||" + std::to_string(contact.lastMessageId);
-
+                    contact.username + "|||" + contact.avatar;
                 if (!server->SendToClient(sock, { Opcode::ContactItem, text })) {
                     sent = false;
                     break;
